@@ -1,0 +1,90 @@
+name: Copiar lista de Arley
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  copiar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copiar lista de Arley y aplicar tus arreglos
+        run: |
+          python3 - <<'EOF'
+          import glob, json, os, shutil, subprocess, sys
+
+          SRC = "/tmp/arley"
+          r = subprocess.run(["git", "clone", "--depth", "1", "https://github.com/Arley4d/roms", SRC])
+          if r.returncode != 0:
+              print("No pude bajar la lista de Arley (¿la borró?). Tu copia queda como está.")
+              sys.exit(0)
+
+          def es_lista(f):
+              return f.endswith(".jsonl") or f.endswith(".json")
+
+          def leer(path):
+              with open(path, encoding="utf-8") as fh:
+                  return [l for l in fh if l.strip()]
+
+          de_arley = sorted(f for f in os.listdir(SRC) if es_lista(f))
+          mias = sorted(f for f in os.listdir(".") if es_lista(f))
+          if len(de_arley) < 0.8 * len(mias):
+              print("La lista de Arley trae %d archivos y la tuya %d: algo raro, no copio nada." % (len(de_arley), len(mias)))
+              sys.exit(0)
+
+          for f in de_arley:
+              nuevo = leer(os.path.join(SRC, f))
+              if os.path.exists(f) and len(nuevo) < 0.5 * len(leer(f)):
+                  print("Salteo %s: Arley lo achicó demasiado (%d líneas)." % (f, len(nuevo)))
+                  continue
+              shutil.copyfile(os.path.join(SRC, f), f)
+
+          for a in sorted(glob.glob("_arreglos/*.arr")):
+              f = os.path.basename(a)[:-4] + ".jsonl"
+              filas = [json.loads(l) for l in leer(f)] if os.path.exists(f) else []
+              pos = {fila.get("p"): i for i, fila in enumerate(filas)}
+              n = 0
+              for l in leer(a):
+                  if l.lstrip().startswith("#"):
+                      continue
+                  try:
+                      arr = json.loads(l)
+                  except Exception as e:
+                      print("Línea mal escrita en %s (se saltea): %s" % (a, l.strip()))
+                      continue
+                  p = arr.get("p")
+                  if arr.get("borrar"):
+                      if p in pos:
+                          filas[pos[p]] = None
+                  elif p in pos and filas[pos[p]] is not None:
+                      filas[pos[p]].update(arr)
+                  else:
+                      if "type" not in arr:
+                          arr["type"] = "file"
+                      filas.append(arr)
+                      pos[p] = len(filas) - 1
+                  n += 1
+              with open(f, "w", encoding="utf-8", newline="\n") as fh:
+                  for fila in filas:
+                      if fila is not None:
+                          fh.write(json.dumps(fila, ensure_ascii=False) + "\n")
+              print("Arreglos aplicados en %s: %d" % (f, n))
+          EOF
+
+      - name: Guardar cambios
+        run: |
+          git config user.name "rumruns"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Sin cambios: tu lista ya estaba igual a la de Arley."
+          else
+            git commit -m "Copia diaria de la lista de Arley + tus arreglos"
+            git push
+          fi
